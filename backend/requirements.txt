@@ -1,0 +1,43 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.1
+greenlet==3.1.1
+psycopg2-binary==2.9.11
+
+# AWS
+boto3==1.40.49
+botocore==1.40.49
+aioboto3==15.4.0
+
+# DI
+dependency-injector==4.44.0
+
+# HTTP clients
+httpx==0.28.1
+aiohttp==3.11.11
+
+# Redis
+redis==5.2.1
+
+# Utilities
+colorlog==6.9.0
+python-dotenv==1.0.1
+jinja2==3.1.5
+typer==0.27.2
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+httpx==0.28.1
+ruff==0.8.6
+
+# Rate limiting
+slowapi==0.1.9
