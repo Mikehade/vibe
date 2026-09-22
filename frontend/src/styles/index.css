@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Base reset for Fire TV 10-foot UI ── */
+
+@layer base {
+  html {
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-vibe-bg text-vibe-text font-sans;
+    overflow-x: hidden;
+  }
+
+  /* Hide scrollbars (TV-first — no mouse scrolling) */
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* Focus outline for all interactive elements */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-vibe-accent ring-offset-2 ring-offset-vibe-bg;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-vibe-card/60 backdrop-blur-xl border border-vibe-border/30 rounded-tv;
+  }
+}
