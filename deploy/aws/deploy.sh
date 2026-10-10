@@ -16,6 +16,53 @@ ok()   { printf "\033[1;32m✓\033[0m %s\n" "$*"; }
 die()  { printf "\033[1;31m✗ %s\033[0m\n" "$*" >&2; exit 1; }
 envv() { [ -f "$ENV_FILE" ] && grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" || true; }
 
+# ── CloudFormation helper ────────────────────────────────────────────────
+# Uses create-stack / update-stack directly (not `aws cloudformation deploy`, which crashes with
+# "aws: [ERROR]: 'Status'" on some AWS CLI v2 versions). Recovers stacks left broken by earlier runs.
+#   cfn_apply <stack-name> <template-file> Key=Value ...
+cfn_failures() {
+  aws cloudformation describe-stack-events --stack-name "$1" --max-items 40 \
+    --query "StackEvents[?contains(ResourceStatus, 'FAILED')].[LogicalResourceId,ResourceStatusReason]" --output text 2>/dev/null | head -8
+}
+cfn_apply() {
+  local name="$1" tpl="$2"; shift 2
+  local params; params="$(python3 -c 'import json,sys; print(json.dumps([{"ParameterKey":a.split("=",1)[0],"ParameterValue":a.split("=",1)[1]} for a in sys.argv[1:]]))' "$@")"
+  local status; status="$(aws cloudformation describe-stacks --stack-name "$name" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE)"
+  case "$status" in
+    ROLLBACK_COMPLETE|ROLLBACK_FAILED|CREATE_FAILED|DELETE_FAILED|REVIEW_IN_PROGRESS)
+      say "Stack $name is in state $status from an earlier attempt — removing it first"
+      aws cloudformation delete-stack --stack-name "$name"
+      aws cloudformation wait stack-delete-complete --stack-name "$name" || die "Could not delete $name. Delete it in the CloudFormation console and re-run."
+      status=NONE ;;
+    *_IN_PROGRESS)
+      say "Stack $name is busy ($status) — waiting for it to settle"
+      aws cloudformation wait stack-update-complete --stack-name "$name" 2>/dev/null \
+        || aws cloudformation wait stack-create-complete --stack-name "$name" 2>/dev/null || true
+      status="$(aws cloudformation describe-stacks --stack-name "$name" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE)" ;;
+  esac
+  if [ "$status" = "NONE" ]; then
+    aws cloudformation create-stack --stack-name "$name" --template-body "file://$tpl" \
+      --parameters "$params" --capabilities CAPABILITY_IAM >/dev/null
+    if ! aws cloudformation wait stack-create-complete --stack-name "$name"; then
+      printf "\nWhat failed:\n"; cfn_failures "$name"
+      die "Creating $name failed (details above). Fix it and re-run — the failed stack is cleaned up automatically."
+    fi
+  else
+    local out
+    if ! out="$(aws cloudformation update-stack --stack-name "$name" --template-body "file://$tpl" \
+        --parameters "$params" --capabilities CAPABILITY_IAM 2>&1)"; then
+      case "$out" in
+        *"No updates are to be performed"*) return 0 ;;
+        *) die "Updating $name failed: $out" ;;
+      esac
+    fi
+    if ! aws cloudformation wait stack-update-complete --stack-name "$name"; then
+      printf "\nWhat failed:\n"; cfn_failures "$name"
+      die "Updating $name failed and was rolled back (the previous version is still running)."
+    fi
+  fi
+}
+
 # ── Inputs ───────────────────────────────────────────────────────────────
 for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE; do
   if [ -z "${!v:-}" ] && [ -n "$(envv $v)" ]; then export "$v=$(envv $v)"; fi
@@ -29,6 +76,7 @@ DEFAULT_REGION="${DEFAULT_REGION:-$(envv DEFAULT_REGION)}"; DEFAULT_REGION="${DE
 
 command -v aws >/dev/null    || die "AWS CLI not found. Install: brew install awscli"
 command -v npm >/dev/null    || die "Node.js/npm not found. Install: brew install node"
+command -v python3 >/dev/null || die "python3 not found. Install: brew install python@3.12"
 [ -n "$TMDB_API_KEY" ] && [ "$TMDB_API_KEY" != "your_tmdb_api_key" ] || die "TMDB_API_KEY missing (set it in backend/.env)"
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)" || die "AWS credentials not working. Run 'aws configure' or set keys in backend/.env"
@@ -63,8 +111,7 @@ if [ "$BUILD" = "local" ]; then
 else
   BUILD_STACK="$STACK-build"
   say "Preparing the cloud build (CodeBuild) — one-time setup takes ~1 minute"
-  aws cloudformation deploy --stack-name "$BUILD_STACK" --template-file "$ROOT/deploy/aws/build.yaml" \
-    --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides RepositoryName="$REPO" >/dev/null
+  cfn_apply "$BUILD_STACK" "$ROOT/deploy/aws/build.yaml" RepositoryName="$REPO"
   bout() { aws cloudformation describe-stacks --stack-name "$BUILD_STACK" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
   SRC_BUCKET="$(bout SourceBucketName)"; PROJECT="$(bout ProjectName)"
   command -v zip >/dev/null || die "'zip' not found (macOS has it built in; on Linux: apt install zip)"
@@ -100,27 +147,18 @@ ok "Image ready: $IMAGE (older images removed — one image kept)"
 # ── 2. Infrastructure ───────────────────────────────────────────────────
 VPC="$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)"
 [ "$VPC" != "None" ] && [ -n "$VPC" ] || die "No default VPC in $REGION. Create one: aws ec2 create-default-vpc"
-STATUS="$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)"
-if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
-  say "A previous first-time deploy failed (ROLLBACK_COMPLETE). Removing it before retrying"
-  aws cloudformation delete-stack --stack-name "$STACK"
-  aws cloudformation wait stack-delete-complete --stack-name "$STACK"
-fi
-PREV_IMAGE="$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Parameters[?ParameterKey=='ImageUri'].ParameterValue" --output text 2>/dev/null || true)"
-if ! aws cloudformation describe-stacks --stack-name "$STACK" >/dev/null 2>&1; then
-  PREV_IMAGE=""
-  say "Creating stack $STACK — the database takes ~10–15 minutes the first time. Grab a coffee."
-else
-  say "Updating stack $STACK (App Runner rolls out the new image)"
-fi
-aws cloudformation deploy \
-  --stack-name "$STACK" \
-  --template-file "$ROOT/deploy/aws/template.yaml" \
-  --capabilities CAPABILITY_IAM \
-  --no-fail-on-empty-changeset \
-  --parameter-overrides \
-    ImageUri="$IMAGE" VpcId="$VPC" TmdbApiKey="$TMDB_API_KEY" \
-    BedrockModelId="$MODEL" BedrockFastModelId="$FAST" DefaultRegion="$DEFAULT_REGION"
+STATUS="$(aws cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE)"
+PREV_IMAGE=""
+case "$STATUS" in
+  NONE|ROLLBACK_COMPLETE|ROLLBACK_FAILED|CREATE_FAILED|DELETE_FAILED|REVIEW_IN_PROGRESS)
+    say "Creating stack $STACK — the database and CDN take ~15–25 minutes the first time. Grab a coffee." ;;
+  *)
+    PREV_IMAGE="$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Parameters[?ParameterKey=='ImageUri'].ParameterValue" --output text 2>/dev/null || true)"
+    say "Updating stack $STACK" ;;
+esac
+cfn_apply "$STACK" "$ROOT/deploy/aws/template.yaml" \
+  ImageUri="$IMAGE" VpcId="$VPC" TmdbApiKey="$TMDB_API_KEY" \
+  BedrockModelId="$MODEL" BedrockFastModelId="$FAST" DefaultRegion="$DEFAULT_REGION"
 
 out() { aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
 WEB_URL="$(out WebUrl)"; MCP_URL="$(out McpUrl)"; BUCKET="$(out WebBucketName)"; DIST="$(out DistributionId)"; API_URL="$(out ApiServiceUrl)"
