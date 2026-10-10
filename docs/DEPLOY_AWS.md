@@ -40,15 +40,16 @@ Open **Terminal** and run:
 brew install awscli node python@3.12 git
 ```
 
-Then install **Docker Desktop for Mac (Apple chip)** from https://www.docker.com/products/docker-desktop/,
-open it once, and wait until it says *Engine running*.
+You do **not** need Docker for deploying. The backend image is built inside AWS (CodeBuild), so only a
+~100 KB source zip leaves your computer. Docker Desktop is only needed for `docker compose` locally or for
+`BUILD=local` (see the reference at the end).
 
 **Check:**
 ```bash
 aws --version        # aws-cli/2.x
-docker info | head -3   # no error
 node --version       # v18 or newer
 python3 --version    # 3.11 or newer
+zip -v | head -1     # built into macOS
 ```
 
 ---
@@ -152,8 +153,6 @@ Optional but recommended: `./scripts/test.sh` should end with **✓ All checks p
 
 ## Step 7 — Deploy
 
-Make sure Docker Desktop is running, then:
-
 ```bash
 ./deploy/aws/deploy.sh
 ```
@@ -162,9 +161,12 @@ What happens, in order (you'll see a `→` line for each):
 
 | Stage | What it does | First run | Later runs |
 |---|---|---|---|
-| ECR | Creates the image repository `vibe-api`, logs Docker in | seconds | seconds |
-| Docker build | Builds the backend for linux/amd64 and pushes it | 5–10 min on an M1 (it emulates Intel; slow is normal) | 1–3 min |
-| CloudFormation | Creates RDS, App Runner, S3, CloudFront, secrets, IAM roles | **15–25 min** | 3–6 min |
+| ECR | Creates the image repository `vibe-api` if it doesn't exist | seconds | seconds |
+| Build pipeline | Creates a small CodeBuild project + source bucket (stack `vibe-build`) | ~1 min | seconds |
+| Image build | Uploads a ~100 KB source zip; CodeBuild builds the image in AWS and pushes it as `vibe-api:latest` | 2–4 min | 2–4 min |
+| Clean-up | Deletes every older image in the repository — **only one image is ever kept** | seconds | seconds |
+| CloudFormation | Creates RDS, App Runner, S3, CloudFront, secrets, IAM roles | **15–25 min** | 1–3 min |
+| App Runner rollout | On re-runs, tells App Runner to pull the new image and waits until it's live | — | 2–5 min |
 | Web app | Builds the TV app and uploads it to S3, clears the CDN cache | 1 min | 1 min |
 | Smoke test | Calls `/api/v1/health` through CloudFront | up to 5 min | seconds |
 
@@ -214,8 +216,10 @@ Run the same command again:
 ```bash
 ./deploy/aws/deploy.sh
 ```
-It builds a new image, rolls App Runner over to it (no downtime), and re-uploads the web app.
-The database and your data are kept.
+It rebuilds the image in AWS, replaces the old one (the repository always holds exactly one image),
+rolls App Runner over to it with no downtime, and re-uploads the web app. The database and your data are kept.
+If a previous run was interrupted (for example a stuck upload), just run it again. Partial uploads and old
+images are cleaned up automatically.
 
 Only changed the web app? Running the full deploy is still fine. It just takes a couple of extra minutes for the image.
 
@@ -226,8 +230,8 @@ Only changed the web app? Running the full deploy is still fine. It just takes a
 ```bash
 ./deploy/aws/destroy.sh
 ```
-Type `delete` to confirm. This removes the stack (database included, so all data is lost), empties the
-bucket and deletes the ECR repository. It takes about 10–15 minutes because CloudFront is slow to delete.
+Type `delete` to confirm. This removes both stacks (`vibe` and `vibe-build`; database included, so all data is lost), empties the
+buckets and deletes the ECR repository. It takes about 10–15 minutes because CloudFront is slow to delete.
 
 Keep it running until judging is finished. Judges may open your demo link.
 
@@ -238,8 +242,9 @@ Keep it running until judging is finished. Judges may open your demo link.
 | What you see | What to do |
 |---|---|
 | `AWS credentials not working` | Re-run Step 3. Check `aws sts get-caller-identity`. |
-| `Docker is installed but not running` | Open Docker Desktop and wait for *Engine running*. |
-| Docker build seems stuck at `pip install` | It's emulating Intel on Apple silicon. The first build can take 10 minutes. |
+| Stuck at `pushing layers` (older version of the script) | Press **Ctrl+C** and re-run `./deploy/aws/deploy.sh`. It now builds in AWS, so nothing large is uploaded from your machine. |
+| `Image build FAILED. Logs: https://…` | Open the link; the last red lines show why. Fix it and re-run. |
+| `Docker is installed but not running` (only with `BUILD=local`) | Open Docker Desktop and wait for *Engine running*. |
 | `No default VPC in us-east-1` | `aws ec2 create-default-vpc` then re-run. |
 | `AccessDenied … iam:CreateRole` (or similar) | Your IAM user lacks permissions. Attach **AdministratorAccess** (Step 3). |
 | Stack fails while creating **ApiService** | The container didn't become healthy. Open **App Runner** in the console, pick the service whose name starts with `ApiService`, then **Logs → Application logs**. Common causes: Bedrock model not enabled (Step 4), wrong model id in `.env`. Fix it and re-run `deploy.sh`. The script removes a failed first attempt automatically. |
@@ -258,6 +263,7 @@ Keep it running until judging is finished. Judges may open your demo link.
 |---|---|
 | `deploy/aws/deploy.sh` | The whole deploy: ECR, CloudFormation, web upload, smoke test |
 | `deploy/aws/template.yaml` | All AWS resources (RDS, App Runner, S3, CloudFront, Secrets Manager, IAM) |
+| `deploy/aws/build.yaml` | The image build pipeline (CodeBuild project, source bucket, IAM role) |
 | `deploy/aws/destroy.sh` | Deletes everything |
 | `deploy/aws/outputs.env` | Your URLs after a deploy (not committed to git) |
 
@@ -268,3 +274,4 @@ Optional environment variables for `deploy.sh`:
 | `STACK` | `vibe` | Run a second copy, e.g. `STACK=vibe-test ./deploy/aws/deploy.sh` |
 | `REPO` | `vibe-api` | ECR repository name |
 | `AWS_REGION` | from `.env`, else `us-east-1` | Region to deploy into |
+| `BUILD` | `cloud` | `cloud` builds the image in AWS CodeBuild. `local` builds with Docker on your Mac and pushes it (needs fast upload; retries 3×) |

@@ -111,7 +111,7 @@ Ways to show it, best first:
 | Plan shows "Planning failed" or only template reasons | `./scripts/check-aws.sh`; check model access and region. The plan still completes with the deterministic planner. |
 | No titles / "Nothing matched" | Region with few titles on the chosen services — add a service, or choose "show me everything" in Settings → Streaming services. |
 | Posters missing | TMDB key invalid or rate-limited — `./scripts/check-aws.sh`. |
-| `deploy.sh` fails at docker build | Start Docker Desktop. On first run Apple silicon emulates amd64 — it's slow, not stuck. |
+| `deploy.sh` stuck uploading the image | Ctrl+C and re-run — the image is now built inside AWS (CodeBuild). See DEPLOY_AWS.md. |
 | App Runner unhealthy | AWS console → App Runner → service starting with *ApiService* → Logs. Usually a Bedrock permission/model id or DB start-up; re-run deploy. |
 | Stream stops after ~60 s behind CloudFront | The API sends keep-alive lines; if you changed `PLAN_TIMEOUT_SECONDS` above 55, lower it. |
 | Vega app shows a white screen | Wrong URL in `src/config.ts`; open the URL in Chrome first. |

@@ -11,6 +11,10 @@ BUCKET="$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stac
 aws cloudformation delete-stack --stack-name "$STACK"
 echo "Waiting for the stack to delete (CloudFront can take ~10 minutes)…"
 aws cloudformation wait stack-delete-complete --stack-name "$STACK"
+SRC="$(aws cloudformation describe-stacks --stack-name "$STACK-build" --query "Stacks[0].Outputs[?OutputKey=='SourceBucketName'].OutputValue" --output text 2>/dev/null || true)"
+[ -n "$SRC" ] && [ "$SRC" != "None" ] && aws s3 rm "s3://$SRC" --recursive >/dev/null || true
+aws cloudformation delete-stack --stack-name "$STACK-build" 2>/dev/null || true
+aws cloudformation wait stack-delete-complete --stack-name "$STACK-build" 2>/dev/null || true
 aws ecr delete-repository --repository-name "$REPO" --force >/dev/null 2>&1 || true
 rm -f "$ROOT/deploy/aws/outputs.env"
 echo "Done."

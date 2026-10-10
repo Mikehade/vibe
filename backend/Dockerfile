@@ -1,19 +1,22 @@
-FROM python:3.12-slim AS base
+# Base image from Amazon ECR Public (mirror of Docker Hub's official image) — avoids Docker Hub
+# rate limits when the image is built in AWS CodeBuild.
+FROM public.ecr.aws/docker/library/python:3.12-slim AS base
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+# All dependencies ship prebuilt wheels for linux/amd64 + Python 3.12, so no compiler is needed (keeps the image small).
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-# Development target (docker compose)
+# Development target (docker compose) — adds test tools
 FROM base AS development
+COPY requirements-dev.txt .
+RUN pip install -r requirements-dev.txt
 COPY . .
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 # Production target (AWS App Runner)
 FROM base AS production
 COPY . .
-RUN rm -f .env dev.db && chmod +x start.sh
+RUN rm -rf .env dev.db tests .venv && chmod +x start.sh
 EXPOSE 8000
-HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')" || exit 1
 CMD ["./start.sh"]

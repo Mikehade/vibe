@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Vibe build pipeline — builds the backend image inside AWS (CodeBuild) so only a ~1 MB source zip
+  is uploaded from your computer. Native x86_64, no emulation, no large image push over home internet.
+
+Parameters:
+  RepositoryName:
+    Type: String
+    Default: vibe-api
+
+Resources:
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-sources
+            Status: Enabled
+            ExpirationInDays: 7
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: vibe-build
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "*"
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: !Sub "${SourceBucket.Arn}/*"
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${RepositoryName}"
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: Builds and pushes the Vibe backend image
+      ServiceRole: !GetAtt BuildRole.Arn
+      TimeoutInMinutes: 30
+      Source:
+        Type: S3
+        Location: !Sub "${SourceBucket}/backend.zip"
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+            build:
+              commands:
+                - docker build --target production -t "$REPO_URI:latest" .
+            post_build:
+              commands:
+                - test "$CODEBUILD_BUILD_SUCCEEDING" = "1"
+                - docker push "$REPO_URI:latest"
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: REGISTRY
+            Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com"
+          - Name: REPO_URI
+            Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RepositoryName}"
+
+Outputs:
+  SourceBucketName:
+    Value: !Ref SourceBucket
+  ProjectName:
+    Value: !Ref BuildProject

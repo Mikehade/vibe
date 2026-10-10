@@ -10,7 +10,7 @@ echo "→ Backend virtualenv"
 cd "$ROOT/backend"
 [ -d .venv ] || "$PY" -m venv .venv
 .venv/bin/pip install -q --upgrade pip
-.venv/bin/pip install -q -r requirements.txt
+.venv/bin/pip install -q -r requirements-dev.txt
 [ -f .env ] || { cp .env.example .env; echo "  created backend/.env — add TMDB_API_KEY (and AWS keys if you don't use ~/.aws)"; }
 
 echo "→ Frontend packages"

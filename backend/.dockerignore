@@ -6,3 +6,7 @@ __pycache__
 dev.db
 htmlcov
 .coverage
+.git
+tests/__pycache__
+.ruff_cache
+*.ndjson

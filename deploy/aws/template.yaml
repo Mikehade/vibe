@@ -262,6 +262,8 @@ Outputs:
     Value: !Sub "https://${Distribution.DomainName}/mcp"
   ApiServiceUrl:
     Value: !Sub "https://${ApiService.ServiceUrl}"
+  ApiServiceArn:
+    Value: !GetAtt ApiService.ServiceArn
   WebBucketName:
     Value: !Ref WebBucket
   DistributionId:
