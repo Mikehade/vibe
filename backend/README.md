@@ -154,7 +154,7 @@ Feedback flows:
 | `AWS_ACCESS_KEY_ID` | (required) | AWS credentials for Bedrock |
 | `AWS_SECRET_ACCESS_KEY` | (required) | AWS credentials for Bedrock |
 | `AWS_REGION` | `us-east-1` | AWS region |
-| `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-6` | Claude model ID |
+| `BEDROCK_MODEL_ID` | `global.amazon.nova-2-lite-v1:0` | Nova model ID |
 | `CORS_ORIGINS` | `["http://localhost:5173"]` | Allowed CORS origins |
 | `RATE_LIMIT_PER_MINUTE` | `30` | Per-device rate limit |
 | `LOG_LEVEL` | `INFO` | Logging level |

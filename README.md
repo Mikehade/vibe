@@ -9,7 +9,7 @@ Vibe reads your mood, your taste profile, and your streaming subscriptions, then
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
 │   Fire TV    │────▸│   FastAPI    │────▸│   Bedrock    │
-│  React App   │ API │   Backend    │     │  (Claude)    │
+│  React App   │ API │   Backend    │     │  (Nova)    │
 │  (Vite/TS)   │◂────│  PostgreSQL  │◂────│  Tool Use    │
 └──────────────┘NDJSON└──────────────┘     └──────────────┘
                             │
@@ -29,7 +29,7 @@ Vibe reads your mood, your taste profile, and your streaming subscriptions, then
 
 - Docker & Docker Compose
 - A TMDB API key ([get one free](https://www.themoviedb.org/settings/api))
-- AWS credentials with Bedrock access (Claude model enabled in us-east-1)
+- AWS credentials with Bedrock access (Nova model enabled in us-east-1)
 
 ### 1. Clone and configure
 
@@ -47,7 +47,7 @@ TMDB_API_KEY=your_tmdb_api_key_here
 AWS_ACCESS_KEY_ID=your_aws_key
 AWS_SECRET_ACCESS_KEY=your_aws_secret
 AWS_REGION=us-east-1
-BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-6
+BEDROCK_MODEL_ID="global.amazon.nova-2-lite-v1:0"
 ```
 
 ### 2. Start everything
@@ -174,7 +174,7 @@ make clean          # Clean build artifacts
 
 **Frontend**: React 18, TypeScript, Vite, Zustand, Tailwind CSS, Framer Motion
 
-**AI**: Amazon Bedrock (Claude via Converse API), 4-step reasoning chain with tool calling
+**AI**: Amazon Bedrock (Nova via Converse API), 4-step reasoning chain with tool calling
 
 **External APIs**: TMDB (content metadata), JustWatch via TMDB (streaming availability)
 

@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 class BedrockModel(BaseLLMModel, ILanguageModel):
     def __init__(
         self,
-        model_id: str = "us.anthropic.claude-sonnet-4-6",
+        model_id: str = "global.amazon.nova-2-lite-v1:0",
         region: str = "us-east-1",
         max_tool_iterations: int = 11,
     ):

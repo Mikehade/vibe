@@ -31,7 +31,7 @@ class BaseSettings(PydanticBaseSettings):
     AWS_SECRET_ACCESS_KEY: str = Field(default="", validation_alias="AWS_SECRET_ACCESS_KEY")
     AWS_REGION: str = Field(default="us-east-1", validation_alias="AWS_REGION")
     BEDROCK_MODEL_ID: str = Field(
-        default="us.anthropic.claude-sonnet-4-6",
+        default="global.amazon.nova-2-lite-v1:0",
         validation_alias="BEDROCK_MODEL_ID",
     )
 
