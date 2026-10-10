@@ -34,18 +34,18 @@ logging.info("Sys.path:", sys.path)
 # from config.base import Settings
 
 def get_database_url():
+    from src.config.db_url import resolve_database_url, sync_url
 
-    return os.getenv("DATABASE_URL").replace("postgresql+asyncpg", "postgresql+psycopg2")
+    return sync_url(resolve_database_url())
 
 
 SQLALCHEMY_DATABASE_URI = get_database_url()
 # print(f"SQL URL: {SQLALCHEMY_DATABASE_URI}")
 
 # settings = Settings()
-logging.info(f"\n DB URI: {SQLALCHEMY_DATABASE_URI} \n")
 config = context.config
 
-config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URI)
+config.set_main_option("sqlalchemy.url", SQLALCHEMY_DATABASE_URI.replace("%", "%%"))  # escape for configparser
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

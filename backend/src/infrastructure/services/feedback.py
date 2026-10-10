@@ -3,7 +3,7 @@
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from src.core.domain.interfaces import IFeedbackRepository, ISessionPlanRepository, ITasteProfileRepository
-from src.core.constants.genres import TMDB_GENRE_MAP
+from src.core.constants.genres import TMDB_GENRE_MAP, TMDB_TV_GENRE_MAP
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -56,25 +56,25 @@ class FeedbackService:
             if pick:
                 plan = await self._plan_repo.get_by_id(session, pick.session_plan_id)
                 if plan:
-                    await self._update_profile_from_pick(session, plan.device_id, pick, rating)
+                    await self._update_profile_from_pick(session, plan.device_id, pick, rating, plan.profile_id)
 
             await session.commit()
             return {"id": feedback.id, "rating": rating}
 
     async def _update_profile_from_session(self, session, plan, rating: str, pacing_rating: str | None):
         """Learning loop: session-level feedback updates pacing preferences."""
-        profile = await self._profile_repo.get_by_device_id(session, plan.device_id)
+        profile = await self._profile_repo.get_by_device_id(session, plan.device_id, plan.profile_id)
         if not profile:
             return
 
-        if rating == "thumbs_up" and pacing_rating:
-            # Boost the pacing pattern that worked
+        if pacing_rating:
+            # "too_slow" / "just_right" / "too_fast" nudges future arcs
             await self._profile_repo.update(session, profile.id, pacing_preference=pacing_rating)
             logger.info("Updated pacing preference for device %s", plan.device_id)
 
-    async def _update_profile_from_pick(self, session, device_id: str, pick, rating: str):
+    async def _update_profile_from_pick(self, session, device_id: str, pick, rating: str, profile_id: str | None = None):
         """Learning loop: pick-level feedback updates genre weights."""
-        profile = await self._profile_repo.get_by_device_id(session, device_id)
+        profile = await self._profile_repo.get_by_device_id(session, device_id, profile_id)
         if not profile:
             return
 
@@ -82,7 +82,7 @@ class FeedbackService:
         genre_ids = pick.genre_ids or []
 
         for genre_id in genre_ids:
-            genre_name = TMDB_GENRE_MAP.get(genre_id, "").lower()
+            genre_name = (TMDB_GENRE_MAP.get(genre_id) or TMDB_TV_GENRE_MAP.get(genre_id) or "").lower()
             if not genre_name:
                 continue
 

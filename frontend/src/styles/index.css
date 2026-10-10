@@ -2,37 +2,86 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Base reset for Fire TV 10-foot UI ── */
+/*
+ * 10-foot UI scaling: everything is sized in rem, and on TV routes 1rem = 1/120 of the
+ * viewport width (16px at 1920, 10.7px at 1280, 8px at 960 — Fire TV WebViews often
+ * report 960×540 CSS px). The layout is identical on every screen size.
+ * Phones (Couch Mode join page) use normal 16px rem.
+ */
+html.tv { font-size: calc(100vw / 120); }
+html.phone { font-size: 16px; }
 
 @layer base {
-  html {
-    font-size: 16px;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
-
+  html, body, #root { height: 100%; }
   body {
-    @apply bg-vibe-bg text-vibe-text font-sans;
-    overflow-x: hidden;
+    @apply bg-ink-950 text-paper font-sans antialiased;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
   }
-
-  /* Hide scrollbars (TV-first — no mouse scrolling) */
-  .scrollbar-hide::-webkit-scrollbar {
-    display: none;
-  }
-  .scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-
-  /* Focus outline for all interactive elements */
-  *:focus-visible {
-    @apply outline-none ring-2 ring-vibe-accent ring-offset-2 ring-offset-vibe-bg;
-  }
+  html.phone body { overflow: auto; }
+  button { cursor: pointer; }
+  img { user-select: none; -webkit-user-drag: none; }
+  ::selection { background: rgba(232, 176, 75, 0.35); }
 }
 
 @layer components {
-  .glass-card {
-    @apply bg-vibe-card/60 backdrop-blur-xl border border-vibe-border/30 rounded-tv;
+  /* TV-safe area: 5% horizontal / 4.5% vertical */
+  .safe { padding: 3.2rem 6rem; }
+
+  .label { @apply uppercase text-paper-muted; letter-spacing: 0.16em; font-size: 0.8rem; font-weight: 600; }
+
+  /* Focus: everything focusable gets the same calm, legible treatment */
+  .focusable { outline: none; transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms, background-color 180ms, border-color 180ms, opacity 180ms; }
+  .focusable:focus { outline: none; }
+  .focus-ring:focus { box-shadow: 0 0 0 0.18rem #08080a, 0 0 0 0.38rem #f4f1ea, 0 1.2rem 3rem rgba(0,0,0,0.55); }
+  .focus-lift:focus { transform: scale(1.06); z-index: 5; }
+  .focus-lift-sm:focus { transform: scale(1.03); z-index: 5; }
+
+  .btn {
+    @apply focusable focus-ring inline-flex items-center justify-center gap-[0.6rem] rounded-full font-semibold whitespace-nowrap;
+    padding: 0.9rem 1.9rem; font-size: 1.1rem;
   }
+  .btn-primary { @apply bg-paper text-ink-950; }
+  .btn-primary:focus { @apply bg-amber text-ink-950; transform: scale(1.04); }
+  .btn-ghost { @apply bg-white/[0.07] text-paper; }
+  .btn-ghost:focus { @apply bg-paper text-ink-950; transform: scale(1.04); }
+  .btn:disabled { opacity: 0.4; }
+
+  .chip {
+    @apply focusable focus-ring inline-flex items-center gap-[0.5rem] rounded-full border border-white/10 bg-white/[0.04] text-paper;
+    padding: 0.7rem 1.3rem; font-size: 1.05rem;
+  }
+  .chip[aria-pressed="true"] { @apply border-amber/70 bg-amber/15 text-amber-soft; }
+  .chip:focus { @apply bg-paper text-ink-950 border-paper; }
+
+  .card { @apply rounded-[1.1rem] bg-ink-850 border border-white/[0.06]; }
+
+  .scrim-left { background: linear-gradient(90deg, rgba(8,8,10,0.96) 0%, rgba(8,8,10,0.86) 32%, rgba(8,8,10,0.35) 62%, rgba(8,8,10,0) 100%); }
+  .scrim-bottom { background: linear-gradient(0deg, rgba(8,8,10,1) 0%, rgba(8,8,10,0.85) 28%, rgba(8,8,10,0) 62%); }
+  .scrim-top { background: linear-gradient(180deg, rgba(8,8,10,0.7) 0%, rgba(8,8,10,0) 100%); }
+
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { scrollbar-width: none; }
+}
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(0.8rem); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pulseDot { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
+@keyframes shimmer { from { background-position: -40rem 0; } to { background-position: 40rem 0; } }
+@keyframes drift { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(0, -50%, 0); } }
+@keyframes slowspin { to { transform: rotate(360deg); } }
+@keyframes kenburns { from { transform: scale(1.04); } to { transform: scale(1.12) translate3d(-1%, -1%, 0); } }
+
+.animate-fade-up { animation: fadeUp 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.animate-fade-in { animation: fadeIn 600ms ease both; }
+.animate-pulse-dot { animation: pulseDot 1.2s ease-in-out infinite; }
+.skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.03) 100%);
+  background-size: 80rem 100%;
+  animation: shimmer 1.8s linear infinite;
+}
+.kenburns { animation: kenburns 24s ease-in-out infinite alternate; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }

@@ -1,7 +1,7 @@
 """Unit tests for core domain logic — no DB or network needed."""
 
 import pytest
-from src.core.domain.session_plan import Mood, ArcRole, PlanStatus, PickStatus
+from src.core.domain.session_plan import Mood, ArcRole
 from src.core.domain.taste_profile import TasteProfileEntity
 from src.core.constants.moods import MOOD_GENRE_MAP, get_genre_ids_for_mood, get_excluded_genre_ids_for_mood
 from src.core.constants.genres import TMDB_GENRE_MAP, GENRE_NAME_TO_ID

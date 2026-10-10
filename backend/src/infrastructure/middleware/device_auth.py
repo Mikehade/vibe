@@ -1,63 +1,57 @@
-"""Device-ID-based auth middleware — no user accounts, just anonymous device tokens."""
+"""Device-ID-based auth middleware (pure ASGI, streaming-safe).
 
-from fastapi import Request, HTTPException
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+Every TV (and every phone in Couch Mode) generates a random id on first launch.
+An optional X-Profile-ID header selects a household profile on that device.
+"""
 
-from utils.logger import get_logger
+import json
 
-logger = get_logger(__name__)
+from fastapi import HTTPException, Request
+
+EXEMPT_PREFIXES = ("/api/v1/health", "/api/v1/docs", "/api/v1/redoc", "/api/v1/openapi.json", "/api/v1/content/art/")
 
 
-class DeviceAuthMiddleware(BaseHTTPMiddleware):
-    """Validates X-Device-ID header and attaches it to request state."""
+def is_exempt(path: str) -> bool:
+    """Public paths: health/docs, generated artwork, and read-only live plan follow (for phones)."""
+    return path.startswith(EXEMPT_PREFIXES) or (path.startswith("/api/v1/session/plan/") and path.endswith("/live"))
 
-    EXEMPT_PATHS = {"/api/v1/health", "/docs", "/openapi.json", "/redoc"}
 
-    async def dispatch(self, request: Request, call_next):
-        # Skip auth for exempt paths
-        if request.url.path in self.EXEMPT_PATHS:
-            return await call_next(request)
+async def _reject(send, code: str, message: str):
+    body = json.dumps({"success": False, "message": message, "code": code}).encode()
+    await send({"type": "http.response.start", "status": 400, "headers": [(b"content-type", b"application/json")]})
+    await send({"type": "http.response.body", "body": body})
 
-        # Skip non-API paths
-        if not request.url.path.startswith("/api/"):
-            return await call_next(request)
 
-        # Skip CORS preflight requests (browser sends OPTIONS without custom headers)
-        if request.method == "OPTIONS":
-            return await call_next(request)
+class DeviceAuthMiddleware:
+    def __init__(self, app):
+        self.app = app
 
-        device_id = request.headers.get("X-Device-ID")
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        path = scope.get("path", "")
+        if not path.startswith("/api/") or scope.get("method") == "OPTIONS":
+            return await self.app(scope, receive, send)
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        device_id = headers.get("x-device-id")
         if not device_id:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "message": "X-Device-ID header is required",
-                    "code": "MISSING_DEVICE_ID",
-                },
-            )
-
+            if is_exempt(path):
+                return await self.app(scope, receive, send)
+            return await _reject(send, "MISSING_DEVICE_ID", "X-Device-ID header is required")
         if len(device_id) > 255 or len(device_id) < 4:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "message": "Invalid X-Device-ID format",
-                    "code": "INVALID_DEVICE_ID",
-                },
-            )
-
-        # Attach device_id to request state for downstream use
-        request.state.device_id = device_id
-        logger.debug("Request from device %s: %s %s", device_id[:8], request.method, request.url.path)
-
-        return await call_next(request)
+            return await _reject(send, "INVALID_DEVICE_ID", "Invalid X-Device-ID format")
+        state = scope.setdefault("state", {})
+        state["device_id"] = device_id
+        state["profile_id"] = headers.get("x-profile-id") or None
+        return await self.app(scope, receive, send)
 
 
 async def get_device_id(request: Request) -> str:
-    """FastAPI dependency to extract device_id from request state."""
     device_id = getattr(request.state, "device_id", None)
     if not device_id:
         raise HTTPException(status_code=400, detail="X-Device-ID header is required")
     return device_id
+
+
+async def get_profile_id(request: Request) -> str | None:
+    return getattr(request.state, "profile_id", None)

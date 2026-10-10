@@ -47,3 +47,8 @@ coverage/
 # Misc
 *.log
 *.pid
+
+# Local data / deploy outputs
+backend/dev.db
+deploy/aws/outputs.env
+.ruff_cache/

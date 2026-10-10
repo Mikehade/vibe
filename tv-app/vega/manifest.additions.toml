@@ -1,0 +1,21 @@
+# Appended to the generated project's manifest.toml by setup.sh (from the Vega "Set up your web app" guide).
+[[wants.service]]
+id = "com.amazon.media.server"
+[[wants.service]]
+id = "com.amazon.mediametrics.service"
+[[wants.service]]
+id = "com.amazon.mediabuffer.service"
+[[wants.service]]
+id = "com.amazon.mediatransform.service"
+[[wants.service]]
+id = "com.amazon.audio.stream"
+[[wants.service]]
+id = "com.amazon.audio.control"
+[[needs.privilege]]
+id = "com.amazon.privilege.security.file-sharing"
+[[wants.service]]
+id = "com.amazon.kepler.ucc.publisher"
+[[wants.service]]
+id = "com.amazon.gipc.uuid.*"
+[[offers.service]]
+id = "com.amazon.gipc.uuid.*"

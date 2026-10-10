@@ -1,0 +1,270 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Vibe — AI movie-night planner for Fire TV. App Runner (FastAPI + MCP) + RDS PostgreSQL +
+  S3/CloudFront (web app). Amazon Bedrock (Claude) for planning.
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: ECR image for the backend (pushed by deploy.sh)
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the database (deploy.sh uses the default VPC)
+  TmdbApiKey:
+    Type: String
+    NoEcho: true
+    Description: TMDB v3 API key or v4 read token
+  BedrockModelId:
+    Type: String
+    Default: us.anthropic.claude-sonnet-4-6
+  BedrockFastModelId:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  DefaultRegion:
+    Type: String
+    Default: US
+    Description: Default streaming region for new profiles (ISO country code)
+
+Resources:
+  # ── Secrets ─────────────────────────────────────────────────────────────
+  DbPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Vibe RDS master password
+      GenerateSecretString:
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  TmdbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Vibe TMDB API key
+      SecretString: !Ref TmdbApiKey
+
+  # ── Database ────────────────────────────────────────────────────────────
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Vibe Postgres (App Runner connects over TLS with a generated password)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 0.0.0.0/0
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks: [W3691] # major-only version: RDS picks the current default minor
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Engine: postgres
+      EngineVersion: "17"
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: "20"
+      StorageType: gp3
+      DBName: vibe
+      MasterUsername: vibe
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DbPasswordSecret}}}"
+      PubliclyAccessible: true
+      VPCSecurityGroups:
+        - !GetAtt DbSecurityGroup.GroupId
+      BackupRetentionPeriod: 1
+      StorageEncrypted: true
+      DeletionProtection: false
+
+  # ── App Runner ──────────────────────────────────────────────────────────
+  AppRunnerEcrAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: build.apprunner.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess
+
+  AppRunnerInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: tasks.apprunner.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: vibe-runtime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Bedrock
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: "*"
+              - Sid: Secrets
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DbPasswordSecret
+                  - !Ref TmdbSecret
+
+  AutoScaling:
+    Type: AWS::AppRunner::AutoScalingConfiguration
+    Properties:
+      # One instance: Couch Mode rooms, live plan streams and caches are in-process state.
+      MinSize: 1
+      MaxSize: 1
+      MaxConcurrency: 100
+
+  ApiService:
+    Type: AWS::AppRunner::Service
+    Properties:
+      SourceConfiguration:
+        AuthenticationConfiguration:
+          AccessRoleArn: !GetAtt AppRunnerEcrAccessRole.Arn
+        AutoDeploymentsEnabled: false
+        ImageRepository:
+          ImageIdentifier: !Ref ImageUri
+          ImageRepositoryType: ECR
+          ImageConfiguration:
+            Port: "8000"
+            RuntimeEnvironmentVariables:
+              - { Name: ENV, Value: production }
+              - { Name: AWS_REGION, Value: !Ref AWS::Region }
+              - { Name: BEDROCK_MODEL_ID, Value: !Ref BedrockModelId }
+              - { Name: BEDROCK_FAST_MODEL_ID, Value: !Ref BedrockFastModelId }
+              - { Name: DEFAULT_REGION, Value: !Ref DefaultRegion }
+              - { Name: DB_HOST, Value: !GetAtt Database.Endpoint.Address }
+              - { Name: DB_PORT, Value: !GetAtt Database.Endpoint.Port }
+              - { Name: DB_NAME, Value: vibe }
+              - { Name: DB_USER, Value: vibe }
+              - { Name: FAKE_SERVICES, Value: "false" }
+              - { Name: LOG_LEVEL, Value: INFO }
+            RuntimeEnvironmentSecrets:
+              - { Name: DB_PASSWORD, Value: !Ref DbPasswordSecret }
+              - { Name: TMDB_API_KEY, Value: !Ref TmdbSecret }
+      InstanceConfiguration:
+        Cpu: "1 vCPU"
+        Memory: "2 GB"
+        InstanceRoleArn: !GetAtt AppRunnerInstanceRole.Arn
+      HealthCheckConfiguration:
+        Protocol: HTTP
+        Path: /api/v1/health
+        Interval: 10
+        Timeout: 5
+        HealthyThreshold: 1
+        UnhealthyThreshold: 5
+      AutoScalingConfigurationArn: !GetAtt AutoScaling.AutoScalingConfigurationArn
+
+  # ── Web app: S3 + CloudFront (API and MCP routed to App Runner) ────────
+  WebBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  WebOac:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${AWS::StackName}-web-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudfront.amazonaws.com }
+            Action: s3:GetObject
+            Resource: !Sub "${WebBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribution}"
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Vibe web app + API
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        PriceClass: PriceClass_All
+        Origins:
+          - Id: web
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt WebOac.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: api
+            DomainName: !GetAtt ApiService.ServiceUrl
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 60
+        DefaultCacheBehavior:
+          TargetOriginId: web
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # Managed-CachingOptimized
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: false # keep NDJSON streaming unbuffered
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # Managed-CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
+          - PathPattern: /mcp*
+            TargetOriginId: api
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD]
+            Compress: false
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+Outputs:
+  WebUrl:
+    Description: Open this on the TV (Vega shell), in a browser, or Fire TV Silk
+    Value: !Sub "https://${Distribution.DomainName}"
+  McpUrl:
+    Description: Alexa+ / MCP Streamable HTTP endpoint
+    Value: !Sub "https://${Distribution.DomainName}/mcp"
+  ApiServiceUrl:
+    Value: !Sub "https://${ApiService.ServiceUrl}"
+  WebBucketName:
+    Value: !Ref WebBucket
+  DistributionId:
+    Value: !Ref Distribution
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address

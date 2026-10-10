@@ -1,41 +1,36 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        vibe: {
-          bg: '#0a0a0f',
-          surface: '#14141f',
-          card: '#1c1c2e',
-          border: '#2a2a3e',
-          accent: '#6c5ce7',
-          'accent-light': '#a29bfe',
-          text: '#e8e8f0',
-          'text-muted': '#8888a0',
-          success: '#00b894',
-          warning: '#fdcb6e',
-          danger: '#e17055',
+        ink: {
+          950: '#08080a',
+          900: '#0d0d10',
+          850: '#131317',
+          800: '#1a1a1f',
+          700: '#26262d',
+          600: '#34343c',
+        },
+        paper: {
+          DEFAULT: '#f4f1ea',
+          muted: '#a8a39a',
+          faint: '#6f6b64',
+        },
+        amber: { DEFAULT: '#e8b04b', soft: '#f3cf85', deep: '#b9822a' },
+        role: {
+          opener: '#8cc0ad',
+          main: '#e8b04b',
+          bridge: '#a99be0',
+          nightcap: '#7f9fdc',
         },
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+        serif: ['"Instrument Serif"', 'Georgia', 'serif'],
       },
-      // Fire TV 10-foot UI — larger tap/focus targets
-      spacing: {
-        tv: '2.5rem',
-        'tv-lg': '4rem',
-      },
-      fontSize: {
-        'tv-sm': ['1.125rem', '1.5rem'],
-        'tv-base': ['1.375rem', '1.875rem'],
-        'tv-lg': ['1.75rem', '2.25rem'],
-        'tv-xl': ['2.25rem', '2.75rem'],
-        'tv-2xl': ['3rem', '3.5rem'],
-      },
-      borderRadius: {
-        tv: '1rem',
-      },
+      letterSpacing: { label: '0.16em' },
+      transitionTimingFunction: { out: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
     },
   },
   plugins: [],

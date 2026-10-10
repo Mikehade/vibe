@@ -1,51 +1,31 @@
-"""Per-device rate limiting via in-memory store (Redis upgrade later)."""
+"""Per-device rate limiting for expensive endpoints (pure ASGI, in-memory, single instance)."""
 
+import json
 import time
 from collections import defaultdict
 
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
-
-from utils.logger import get_logger
-
-logger = get_logger(__name__)
+LIMITED = ("/api/v1/session/plan", "/api/v1/mood/parse")
 
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Simple in-memory rate limiter per device ID."""
-
+class RateLimitMiddleware:
     def __init__(self, app, rate_limit_per_minute: int = 30):
-        super().__init__(app)
-        self._calls_per_minute = rate_limit_per_minute
-        self._requests: dict[str, list[float]] = defaultdict(list)
+        self.app = app
+        self._limit = rate_limit_per_minute
+        self._hits: dict[str, list[float]] = defaultdict(list)
 
-    async def dispatch(self, request: Request, call_next):
-        if not request.url.path.startswith("/api/"):
-            return await call_next(request)
-
-        device_id = getattr(request.state, "device_id", None)
-        if not device_id:
-            return await call_next(request)
-
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("method") != "POST" or not scope.get("path", "").startswith(LIMITED):
+            return await self.app(scope, receive, send)
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        key = headers.get("x-device-id") or (scope.get("client") or ("anon",))[0]
         now = time.time()
-        window_start = now - 60
-
-        # Clean old entries
-        self._requests[device_id] = [
-            t for t in self._requests[device_id] if t > window_start
-        ]
-
-        if len(self._requests[device_id]) >= self._calls_per_minute:
-            logger.warning("Rate limit exceeded for device %s", device_id[:8])
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "success": False,
-                    "message": "Rate limit exceeded. Try again in a moment.",
-                    "code": "RATE_LIMITED",
-                },
-            )
-
-        self._requests[device_id].append(now)
-        return await call_next(request)
+        window = [t for t in self._hits[key] if t > now - 60]
+        if len(window) >= self._limit:
+            self._hits[key] = window
+            body = json.dumps({"success": False, "message": "Too many requests. Try again in a moment.", "code": "RATE_LIMITED"}).encode()
+            await send({"type": "http.response.start", "status": 429, "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": body})
+            return
+        window.append(now)
+        self._hits[key] = window
+        return await self.app(scope, receive, send)

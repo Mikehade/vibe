@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.api.session.models import GeneratePlanRequest, UpdatePickStatusRequest
+from src.api.session.models import GeneratePlanRequest
 from src.api.mood.models import ParseMoodRequest
 from src.api.profile.models import OnboardingRequest, GenrePreference
 from src.api.feedback.models import SessionFeedbackRequest, PickFeedbackRequest
@@ -11,21 +11,25 @@ from src.api.feedback.models import SessionFeedbackRequest, PickFeedbackRequest
 
 class TestGeneratePlanRequest:
     def test_valid_minimal(self):
-        req = GeneratePlanRequest(mood="chill")
-        assert req.mood == "chill"
+        req = GeneratePlanRequest(mood="tired")
+        assert req.mood == "tired"
         assert req.time_budget_minutes is None
 
     def test_valid_full(self):
-        req = GeneratePlanRequest(mood="excited", time_budget_minutes=120, voice_transcript="feeling pumped")
+        req = GeneratePlanRequest(mood="energised", time_budget_minutes=120, voice_transcript="feeling pumped")
         assert req.time_budget_minutes == 120
 
     def test_time_budget_too_low(self):
         with pytest.raises(ValidationError):
-            GeneratePlanRequest(mood="chill", time_budget_minutes=10)
+            GeneratePlanRequest(mood="tired", time_budget_minutes=10)
 
     def test_time_budget_too_high(self):
         with pytest.raises(ValidationError):
-            GeneratePlanRequest(mood="chill", time_budget_minutes=500)
+            GeneratePlanRequest(mood="tired", time_budget_minutes=500)
+
+    def test_unknown_mood_rejected(self):
+        with pytest.raises(ValidationError):
+            GeneratePlanRequest(mood="chill")
 
     def test_mood_required(self):
         with pytest.raises(ValidationError):
@@ -46,7 +50,7 @@ class TestOnboardingRequest:
     def test_valid(self):
         req = OnboardingRequest(
             genre_preferences=[GenrePreference(genre="action", action="like")],
-            streaming_services=["netflix"],
+            streaming_services=[{"id": 8, "name": "Netflix"}],
         )
         assert len(req.genre_preferences) == 1
 

@@ -1,113 +1,95 @@
 """Vibe — Session Architect API entry point."""
+
+import contextlib
 import os
-from dotenv import load_dotenv, find_dotenv
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from dotenv import find_dotenv, load_dotenv
 
-from src.config.base import get_settings
-from src.config.dependency_injection.container import Container
-from src.infrastructure.middleware.device_auth import DeviceAuthMiddleware
-from src.infrastructure.middleware.rate_limit import RateLimitMiddleware
-from src.api.health.router import router as health_router
-from src.api.session.router import router as session_router
-from src.api.mood.router import router as mood_router
-from src.api.profile.router import router as profile_router
-from src.api.content.router import router as content_router
-from src.api.feedback.router import router as feedback_router
-from utils.logger import get_logger
+load_dotenv(find_dotenv())
+
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+from src.api.content.router import router as content_router  # noqa: E402
+from src.api.couch.router import router as couch_router  # noqa: E402
+from src.api.feedback.router import router as feedback_router  # noqa: E402
+from src.api.health.router import router as health_router  # noqa: E402
+from src.api.mood.router import router as mood_router  # noqa: E402
+from src.api.profile.router import router as profile_router  # noqa: E402
+from src.api.session.router import router as session_router  # noqa: E402
+from src.api.tv.router import router as tv_router  # noqa: E402
+from src.config.base import get_settings  # noqa: E402
+from src.config.dependency_injection.container import Container  # noqa: E402
+from src.infrastructure.middleware.device_auth import DeviceAuthMiddleware  # noqa: E402
+from src.infrastructure.middleware.rate_limit import RateLimitMiddleware  # noqa: E402
+from src.mcp_server.server import build_mcp  # noqa: E402
+from utils.logger import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
 
-#  Load .env and pick the right Settings class
-load_dotenv(find_dotenv())
-FASTAPI_ENV = os.getenv("ENV", "development").lower()
-
-# ── Settings ─────────────────────────────────────────────────────────────────
-from src.config.development import DevelopmentSettings
-from src.config.staging import StagingSettings
-from src.config.production import ProductionSettings
-
-_settings_map = {
-    "development": DevelopmentSettings,
-    "staging":     StagingSettings,
-    "production":  ProductionSettings,
-}
-
-if FASTAPI_ENV not in _settings_map:
-    raise ValueError(f"Unknown ENV: '{FASTAPI_ENV}'. Must be one of: {list(_settings_map)}")
-
-settings = _settings_map[FASTAPI_ENV]()
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup / shutdown lifecycle."""
-    settings = get_settings()
-    logger.info("Starting Vibe API — env=%s", settings.ENV)
-
-    # Initialize DI container
-    container = Container()
-    app.state.container = container
-
-    # Initialize database
-    db = container.database()
-    # await db.create_all()
-    logger.info("Database tables ensured")
-
-    yield
-
-    # Shutdown
-    logger.info("Shutting down Vibe API")
-    await db.engine.dispose()
+ENV = os.getenv("ENV", "development").lower()
+if ENV not in ("development", "staging", "production"):
+    raise ValueError(f"Unknown ENV: '{ENV}'")
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    container = Container()
+    mcp = build_mcp(container)
+    mcp_app = mcp.streamable_http_app()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        logger.info(
+            "Starting Vibe API — env=%s fake_services=%s model=%s", settings.ENV, settings.FAKE_SERVICES, settings.BEDROCK_MODEL_ID
+        )
+        db = container.database()
+        if db.is_sqlite:
+            await db.create_all()
+        async with contextlib.AsyncExitStack() as stack:
+            await stack.enter_async_context(mcp.session_manager.run())
+            yield
+        logger.info("Shutting down Vibe API")
+        with contextlib.suppress(Exception):
+            await container.language_model().close()
+        await db.engine.dispose()
 
     app = FastAPI(
         title="Vibe — Session Architect",
-        description="AI-powered movie night planner for Fire TV",
-        version="0.1.0",
+        description="AI movie-night planner for Fire TV, with an Alexa+ MCP server at /mcp",
+        version="1.0.0",
         lifespan=lifespan,
-        docs_url="/api/v1/docs" if settings.ENV != "production" else None,
-        redoc_url="/api/v1/redoc" if settings.ENV != "production" else None,
+        docs_url="/api/v1/docs",
+        redoc_url=None,
+        openapi_url="/api/v1/openapi.json",
     )
+    app.state.container = container
 
-    # ── Middleware (order matters — outermost first) ─────
+    origins = settings.CORS_ORIGINS
+    wildcard = "*" in origins
+    app.add_middleware(RateLimitMiddleware, rate_limit_per_minute=settings.RATE_LIMIT_PER_MINUTE or 30)
+    app.add_middleware(DeviceAuthMiddleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.CORS_ORIGINS,
-        allow_credentials=True,
+        allow_origins=["*"] if wildcard else origins,
+        allow_credentials=not wildcard,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Mcp-Session-Id"],
     )
-    app.add_middleware(DeviceAuthMiddleware)
-    app.add_middleware(RateLimitMiddleware, rate_limit_per_minute=settings.RATE_LIMIT_PER_MINUTE or 60)
 
-    # ── Routers ─────────────────────────────────────────
-    app.include_router(health_router, prefix="/api/v1")
-    app.include_router(session_router, prefix="/api/v1")
-    app.include_router(mood_router, prefix="/api/v1")
-    app.include_router(profile_router, prefix="/api/v1")
-    app.include_router(content_router, prefix="/api/v1")
-    app.include_router(feedback_router, prefix="/api/v1")
+    for r in (health_router, session_router, mood_router, profile_router, content_router, feedback_router, couch_router, tv_router):
+        app.include_router(r, prefix="/api/v1")
 
+    # MCP (Streamable HTTP) — served at /mcp. Mounted last so API routes win.
+    app.mount("/", mcp_app)
     return app
 
 
 app = create_app()
 
-# Uvicorn entrypoint
 if __name__ == "__main__":
     import uvicorn
-    logger.info("About to start API")
-    is_dev = FASTAPI_ENV == "development"
 
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=(FASTAPI_ENV == "development"),
-        workers=None if is_dev else 2,
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=ENV == "development")

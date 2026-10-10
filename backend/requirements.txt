@@ -1,7 +1,7 @@
 # Web framework
-fastapi==0.115.6
+fastapi==0.141.1
 uvicorn[standard]==0.34.0
-pydantic==2.10.4
+pydantic==2.13.5
 pydantic-settings==2.7.1
 
 # Database
@@ -10,21 +10,22 @@ asyncpg==0.30.0
 alembic==1.14.1
 greenlet==3.1.1
 psycopg2-binary==2.9.11
+aiosqlite==0.22.1
 
 # AWS
 boto3==1.40.49
 botocore==1.40.49
 aioboto3==15.4.0
 
+# MCP (Alexa+ integration, spec 2025-11-25, Streamable HTTP)
+mcp==1.30.0
+
 # DI
 dependency-injector==4.44.0
 
 # HTTP clients
 httpx==0.28.1
-aiohttp==3.11.11
 
-# Redis
-redis==5.2.1
 
 # Utilities
 colorlog==6.9.0
@@ -39,5 +40,3 @@ pytest-cov==6.0.0
 httpx==0.28.1
 ruff==0.8.6
 
-# Rate limiting
-slowapi==0.1.9

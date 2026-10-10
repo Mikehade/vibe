@@ -10,9 +10,10 @@ logger = get_logger(__name__)
 
 
 class MoodService:
-    def __init__(self, llm: ILanguageModel, session_factory=None):
+    def __init__(self, llm: ILanguageModel, session_factory=None, fast_model_id: str | None = None):
         self._llm = llm
         self._session_factory = session_factory
+        self._fast_model_id = fast_model_id
 
     async def parse_mood(self, transcript: str) -> dict:
         """Parse a voice/text transcript into a structured mood."""
@@ -20,7 +21,7 @@ class MoodService:
         messages = [{"role": "user", "content": [{"text": prompt}]}]
 
         try:
-            response = await self._llm.invoke(messages=messages, temperature=0.3, max_tokens=256)
+            response = await self._llm.invoke(messages=messages, temperature=0.3, max_tokens=256, model_id=self._fast_model_id)
             text = ""
             for block in response.get("output", {}).get("message", {}).get("content", []):
                 if "text" in block:

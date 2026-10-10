@@ -1,0 +1,14 @@
+{
+  "name": "tv-dpad-focus",
+  "version": "0.1.0",
+  "description": "Tiny D-pad spatial navigation for React TV web apps (Fire TV / Vega OS WebView, Silk, Android TV, desktop).",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": { "build": "tsc -p tsconfig.json" },
+  "peerDependencies": { "react": ">=17" },
+  "devDependencies": { "@types/react": "^18.3.3", "react": "^18.3.1", "typescript": "^5.5.4" },
+  "keywords": ["fire-tv", "vega", "tv", "dpad", "spatial-navigation", "react", "remote", "10-foot"]
+}

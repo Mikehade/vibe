@@ -1,71 +1,59 @@
-version: "3.9"
-
+# Local stack: API (FastAPI + MCP), web app (Vite), Postgres.
+#   docker compose up          → http://localhost:5173 (TV app), http://localhost:8000/api/v1/docs, /mcp
+# For offline demo data without keys: FAKE_SERVICES=true docker compose up
 services:
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
       target: development
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - ${HOME}/.aws:/root/.aws:ro
     env_file:
-      - .env
       - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vibe:vibe_dev_password@postgres:5432/vibe
+      FAKE_SERVICES: ${FAKE_SERVICES:-false}
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --reload"
     restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
       target: development
     ports:
       - "5173:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules
-    env_file:
-      - ./frontend/.env
+    environment:
+      VITE_PROXY_TARGET: http://backend:8000
     depends_on:
       - backend
     command: npm run dev -- --host 0.0.0.0
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     ports:
       - "5432:5432"
-    env_file:
-      - .env
+    environment:
+      POSTGRES_USER: vibe
+      POSTGRES_PASSWORD: vibe_dev_password
+      POSTGRES_DB: vibe
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vibe}"]
+      test: ["CMD-SHELL", "pg_isready -U vibe"]
       interval: 5s
       timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      retries: 10
     restart: unless-stopped
 
 volumes:
   postgres_data:
-  redis_data:

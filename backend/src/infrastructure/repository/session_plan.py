@@ -21,6 +21,7 @@ class SessionPlanRepository(ISessionPlanRepository):
     async def get_by_id(self, session: AsyncSession, plan_id: str) -> SessionPlan | None:
         result = await session.execute(
             select(SessionPlan)
+            .execution_options(populate_existing=True)
             .options(selectinload(SessionPlan.picks).selectinload(SessionPick.feedback))
             .options(selectinload(SessionPlan.feedback))
             .where(SessionPlan.id == plan_id, SessionPlan.deleted_at.is_(None))
@@ -33,7 +34,11 @@ class SessionPlanRepository(ISessionPlanRepository):
         result = await session.execute(
             select(SessionPlan)
             .options(selectinload(SessionPlan.picks))
-            .where(SessionPlan.device_id == device_id, SessionPlan.deleted_at.is_(None))
+            .where(
+                SessionPlan.device_id == device_id,
+                SessionPlan.deleted_at.is_(None),
+                SessionPlan.status != "generating",
+            )
             .order_by(SessionPlan.created_at.desc())
             .limit(limit)
             .offset(offset)
@@ -66,4 +71,30 @@ class SessionPlanRepository(ISessionPlanRepository):
 
     async def get_pick_by_id(self, session: AsyncSession, pick_id: str) -> SessionPick | None:
         result = await session.execute(select(SessionPick).where(SessionPick.id == pick_id))
+        return result.scalar_one_or_none()
+
+    async def soft_delete_picks_after(self, session: AsyncSession, plan_id: str, position: int) -> int:
+        from datetime import datetime, timezone
+
+        result = await session.execute(
+            select(SessionPick).where(
+                SessionPick.session_plan_id == plan_id,
+                SessionPick.position > position,
+                SessionPick.deleted_at.is_(None),
+            )
+        )
+        picks = list(result.scalars().all())
+        for p in picks:
+            p.deleted_at = datetime.now(timezone.utc)
+        await session.flush()
+        return len(picks)
+
+    async def latest_for_device(self, session: AsyncSession, device_id: str) -> SessionPlan | None:
+        result = await session.execute(
+            select(SessionPlan)
+            .options(selectinload(SessionPlan.picks))
+            .where(SessionPlan.device_id == device_id, SessionPlan.deleted_at.is_(None))
+            .order_by(SessionPlan.created_at.desc())
+            .limit(1)
+        )
         return result.scalar_one_or_none()

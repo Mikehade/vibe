@@ -20,7 +20,7 @@ class IDeviceRepository(ABC):
 
 class ITasteProfileRepository(ABC):
     @abstractmethod
-    async def get_by_device_id(self, session: AsyncSession, device_id: str) -> Any | None: ...
+    async def get_by_device_id(self, session: AsyncSession, device_id: str, profile_id: str | None = None) -> Any | None: ...
 
     @abstractmethod
     async def create(self, session: AsyncSession, device_id: str, **kwargs) -> Any: ...
@@ -68,19 +68,22 @@ class IFeedbackRepository(ABC):
 
 
 class IContentClient(ABC):
-    @abstractmethod
-    async def search(self, query: str, genres: list[int] | None = None, page: int = 1) -> dict: ...
+    """Catalog source (TMDB in production, a fixture catalog in FAKE_SERVICES mode)."""
 
     @abstractmethod
-    async def get_details(self, tmdb_id: int) -> dict: ...
+    async def discover(self, media_type: str, params: dict) -> list[dict]: ...
 
     @abstractmethod
-    async def get_providers(self, tmdb_id: int) -> dict: ...
+    async def details(self, media_type: str, tmdb_id: int) -> dict: ...
 
     @abstractmethod
-    async def discover_by_genres(
-        self, genre_ids: list[int], exclude_ids: list[int] | None = None, page: int = 1
-    ) -> list[dict]: ...
+    async def recommendations(self, media_type: str, tmdb_id: int) -> list[dict]: ...
+
+    @abstractmethod
+    async def search_multi(self, query: str, page: int = 1) -> list[dict]: ...
+
+    @abstractmethod
+    async def watch_providers(self, region: str) -> list[dict]: ...
 
 
 class ILanguageModel(ABC):
@@ -89,3 +92,14 @@ class ILanguageModel(ABC):
 
     @abstractmethod
     async def prompt(self, messages: list[dict], **kwargs) -> AsyncGenerator[str, None]: ...
+
+    @abstractmethod
+    def stream_turn(
+        self, messages: list[dict], system: list[dict], tools: list[dict] | None = None, **kwargs
+    ) -> AsyncGenerator[dict, None]:
+        """Stream one assistant turn. Yields:
+        {"type": "text", "text": str}
+        {"type": "tool_use", "id": str, "name": str, "input": dict}
+        {"type": "stop", "reason": str, "message": dict}   # message = full assistant message for history
+        """
+        ...

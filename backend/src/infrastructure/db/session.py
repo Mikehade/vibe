@@ -12,13 +12,11 @@ class Database:
     """Async database connection manager."""
 
     def __init__(self, database_url: str, echo: bool = False):
-        self._engine = create_async_engine(
-            database_url,
-            echo=echo,
-            pool_pre_ping=True,
-            pool_size=10,
-            max_overflow=20,
-        )
+        kwargs = {"echo": echo, "pool_pre_ping": True}
+        if database_url.startswith("postgresql"):
+            kwargs.update(pool_size=10, max_overflow=20)
+        self._engine = create_async_engine(database_url, **kwargs)
+        self.is_sqlite = database_url.startswith("sqlite")
         self._session_factory = async_sessionmaker(
             bind=self._engine,
             class_=AsyncSession,
@@ -44,6 +42,14 @@ class Database:
             raise
         finally:
             await session.close()
+
+    async def create_all(self) -> None:
+        """Create tables directly (SQLite / quick local runs). Postgres uses Alembic migrations."""
+        from src.infrastructure.db.base import Base
+        import src.infrastructure.db.models  # noqa: F401
+
+        async with self._engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
     async def dispose(self) -> None:
         await self._engine.dispose()

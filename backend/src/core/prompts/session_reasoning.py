@@ -1,111 +1,43 @@
-"""Prompt templates for the 4-step session reasoning pipeline."""
+"""Prompts for the single-pass, streaming Session Architect."""
 
-SYSTEM_PROMPT = """You are the Session Architect — an AI that designs perfect TV viewing sessions.
-You plan multi-show evenings that match the viewer's mood, energy trajectory, and taste.
-Your plans are intentional sequences, not random playlists. Every pick has a role in the arc."""
+SYSTEM_PROMPT = """You are Vibe, the Session Architect for a TV. You programme an evening of viewing the way a friend with great taste would: an intentional sequence, not a playlist.
 
-STEP1_ENERGY_TRAJECTORY = """Based on the viewer's current state, infer their energy trajectory for this session.
+You receive: the viewer's context, a fixed energy arc (slots with roles and runtime targets), and a shortlist of candidate titles that are available to them. Fill every slot.
 
-Current mood: {mood}
-Time of day: {time_of_day}
-Day of week: {day_of_week}
-Hours until typical sleep: {hours_until_sleep}
-{taste_context}
+Rules
+- Only pick titles from the shortlist or from tool results. Never invent ids.
+- One title per slot, no repeats. Avoid two neighbours with the same main genre.
+- Respect runtime targets roughly (±30%). Total must fit the time budget.
+- For series (media_type "tv") choose how many episodes (1–4) fill the slot.
+- Opener = low effort, instantly engaging. Main event = the best, most absorbing pick. Palate cleanser = short and different in tone. Nightcap = calm, warm, easy to fall asleep after.
+- Reasons are for the viewer: max 22 words, specific to the title AND its position in the night, warm and plain. No emojis. No spoilers.
 
-Reason about:
-1. Where they are emotionally RIGHT NOW
-2. Where their energy is heading over the next {session_hours} hours
-3. What kind of content pacing matches that arc
+Tools
+- Call tools only when they clearly help: the viewer named a title, actor or theme ("something like Paddington"), or the shortlist has nothing that fits a slot. Otherwise answer directly — speed matters, a person is waiting.
 
-Respond with a JSON object:
-{{
-  "energy_trajectory": "one sentence describing the energy arc",
-  "arc_shape": "one of: light-heavy-light, ascending, declining, sustaining, variable",
-  "suggested_picks": {num_picks},
-  "reasoning": "2-3 sentences explaining your reasoning"
-}}"""
+Output protocol — plain lines, nothing else, no markdown:
+TRAJECTORY {"energy_trajectory": "<one warm sentence about how the night will feel>"}
+PICK {"slot": <n>, "tmdb_id": <id>, "media_type": "movie"|"tv", "episodes": <n or null>, "reason": "<why this, why here>", "confidence": <0-1>}
+(one PICK line per slot, in slot order)
+SUMMARY {"plan_summary": "<one sentence describing the arc of the evening>"}
 
-STEP2_CANDIDATE_EVALUATION = """Evaluate these candidates for a {mood} mood session with {arc_shape} pacing.
+Write the TRAJECTORY line first, immediately."""
 
-Energy trajectory: {energy_trajectory}
+PLAN_USER_PROMPT = """Context
+- Local time: {local_time_label} ({part_of_day})
+- Mood: {mood}{intensity}
+- Viewer notes: {notes}
+- Time budget: {budget} minutes{bedtime}
+- Who is watching: {audience}
+- Likes: {likes}
+- Dislikes: {dislikes}
+{already_watched}
+Energy arc ({direction}):
+{slots}
 
-Taste profile:
-- Preferred genres: {preferred_genres}
-- Disliked genres: {disliked_genres}
-- Recently watched (avoid repeats): {recently_watched}
+Shortlist (id | type | title (year) | runtime | genres | rating | where | overview):
+{candidates}
 
-Candidates (from TMDB):
-{candidates_json}
+Fill slots {slot_numbers} now."""
 
-For each viable candidate, assess:
-1. Individual fit for this mood
-2. How it would function in a sequence (opener, main_event, bridge, or nightcap)
-3. Runtime compatibility with {time_budget} minute budget
-
-Respond with a JSON array of evaluated candidates:
-[
-  {{
-    "tmdb_id": 12345,
-    "title": "...",
-    "role_fit": ["opener", "nightcap"],
-    "mood_score": 0.85,
-    "sequence_notes": "why this works at this position"
-  }}
-]"""
-
-STEP3_SESSION_ASSEMBLY = """Assemble a session plan from these evaluated candidates.
-
-Target: {num_picks} picks, {arc_shape} pacing, {time_budget} minute budget.
-
-Energy trajectory: {energy_trajectory}
-
-Evaluated candidates:
-{evaluated_candidates_json}
-
-Rules:
-- Each pick gets exactly ONE role: opener, main_event, bridge, or nightcap
-- Opener is always position 1 (low-effort entry point)
-- Total runtime must stay within the time budget
-- No duplicate genres in adjacent positions (variety matters)
-- If a "bridge" role is needed, it separates different tonal sections
-
-Respond with a JSON object:
-{{
-  "session_plan": [
-    {{
-      "position": 1,
-      "role": "opener",
-      "tmdb_id": 12345,
-      "title": "...",
-      "runtime_minutes": 22,
-      "confidence": 0.85
-    }}
-  ],
-  "total_runtime_minutes": 142
-}}"""
-
-STEP4_JUSTIFICATION = """Write viewer-facing justifications for each pick in this session plan.
-
-Mood: {mood}
-Energy trajectory: {energy_trajectory}
-
-Session plan:
-{session_plan_json}
-
-For each pick, write a plain-English justification (max 25 words) that explains:
-1. Why THIS title
-2. Why at THIS position in the sequence
-
-The tone should be conversational — like a friend explaining their recommendation.
-Example: "22 minutes of zero-effort laughs to shake off the workday before something longer."
-
-Respond with a JSON object:
-{{
-  "justifications": [
-    {{
-      "position": 1,
-      "reason": "..."
-    }}
-  ],
-  "plan_summary": "one sentence describing the overall evening arc"
-}}"""
+SWAP_REASON_PROMPT = """Write one line (max 22 words, no emojis, no spoilers) telling a viewer why "{title}" ({year}, {genres}, {runtime} min) works as the {role_label} of a {mood} evening, replacing "{replaced}". Output only the sentence."""

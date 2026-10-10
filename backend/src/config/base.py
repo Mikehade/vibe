@@ -1,7 +1,6 @@
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings as PydanticBaseSettings, SettingsConfigDict
@@ -20,20 +19,31 @@ class BaseSettings(PydanticBaseSettings):
         validation_alias="DATABASE_URL",
     )
 
-    # ── Redis ───────────────────────────────────────────────────────────────
-    REDIS_URL: str = Field(
-        default="redis://localhost:6379/0",
-        validation_alias="REDIS_URL",
-    )
-
     # ── AWS / Bedrock ───────────────────────────────────────────────────────
     AWS_ACCESS_KEY_ID: str = Field(default="", validation_alias="AWS_ACCESS_KEY_ID")
     AWS_SECRET_ACCESS_KEY: str = Field(default="", validation_alias="AWS_SECRET_ACCESS_KEY")
     AWS_REGION: str = Field(default="us-east-1", validation_alias="AWS_REGION")
     BEDROCK_MODEL_ID: str = Field(
-        default="global.amazon.nova-2-lite-v1:0",
+        default="us.anthropic.claude-sonnet-4-6",
         validation_alias="BEDROCK_MODEL_ID",
     )
+
+    # Faster model for short tasks (swap reasons, mood parsing). Falls back to BEDROCK_MODEL_ID on error.
+    BEDROCK_FAST_MODEL_ID: str = Field(
+        default="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        validation_alias="BEDROCK_FAST_MODEL_ID",
+    )
+    # Hard ceiling for one plan generation; after this we finish with the deterministic planner.
+    PLAN_TIMEOUT_SECONDS: int = Field(default=45, validation_alias="PLAN_TIMEOUT_SECONDS")
+    # Max agent turns (each turn may call tools) in one plan generation.
+    MAX_AGENT_TURNS: int = Field(default=4, validation_alias="MAX_AGENT_TURNS")
+
+    # ── Demo / offline mode ─────────────────────────────────────────────────
+    # When true, TMDB and Bedrock are replaced with built-in fakes (no keys needed).
+    FAKE_SERVICES: bool = Field(default=False, validation_alias="FAKE_SERVICES")
+
+    # Public URL of the web app, used for Couch Mode QR links (e.g. https://d123.cloudfront.net)
+    PUBLIC_WEB_URL: str = Field(default="http://localhost:5173", validation_alias="PUBLIC_WEB_URL")
 
     # ── TMDB ────────────────────────────────────────────────────────────────
     TMDB_API_KEY: str = Field(default="", validation_alias="TMDB_API_KEY")
@@ -42,12 +52,12 @@ class BaseSettings(PydanticBaseSettings):
         validation_alias="TMDB_BASE_URL",
     )
 
-    # ── JustWatch ───────────────────────────────────────────────────────────
-    JUSTWATCH_COUNTRY: str = Field(default="US", validation_alias="JUSTWATCH_COUNTRY")
+    # Default watch region when a profile has none (ISO 3166-1, e.g. US, GB, NG)
+    DEFAULT_REGION: str = Field(default="US", validation_alias="DEFAULT_REGION")
 
     # ── CORS ────────────────────────────────────────────────────────────────
     CORS_ORIGINS: list[str] = Field(
-        default=["http://localhost:5173"],
+        default=["*"],
         validation_alias="CORS_ORIGINS",
     )
 
@@ -81,6 +91,15 @@ class BaseSettings(PydanticBaseSettings):
 
 @lru_cache
 def get_settings() -> BaseSettings:
+    settings = _load_settings()
+    from src.config.db_url import resolve_database_url
+
+    if os.getenv("DB_HOST"):
+        settings.DATABASE_URL = resolve_database_url()
+    return settings
+
+
+def _load_settings() -> BaseSettings:
     env = os.getenv("ENV", "development").lower()
 
     if env == "production":

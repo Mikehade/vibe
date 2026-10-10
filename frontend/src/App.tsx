@@ -1,72 +1,137 @@
-/* ── Root app with routing ── */
+import { useEffect } from 'react';
+import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { FocusProvider, FocusScope, focusProps } from '@/lib/focus/FocusProvider';
+import { Toaster, useToast } from '@/components/ui/Toast';
+import Wordmark from '@/components/ui/Wordmark';
+import { exitApp } from '@/lib/shell';
+import * as api from '@/lib/api';
+import { useProfile } from '@/stores/profile';
+import { usePlan } from '@/stores/plan';
+import Home from '@/screens/Home';
+import PlanScreen from '@/screens/PlanScreen';
+import WatchScreen from '@/screens/WatchScreen';
+import Feedback from '@/screens/Feedback';
+import Onboarding from '@/screens/Onboarding';
+import History from '@/screens/History';
+import Settings from '@/screens/Settings';
+import Couch from '@/screens/Couch';
+import Join from '@/screens/Join';
 
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
-import { useProfileStore } from '@/stores/profileStore';
-import OnboardingPage from '@/pages/OnboardingPage';
-import SessionPage from '@/pages/SessionPage';
-import HistoryPage from '@/pages/HistoryPage';
+/** Voice-started plans (Alexa+ via MCP) and remote updates arrive through the TV inbox. */
+function useInbox(enabled: boolean) {
+  const nav = useNavigate();
+  const toast = useToast((s) => s.show);
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const { events } = await api.inbox();
+        for (const ev of events) {
+          if (!alive) return;
+          if (ev.type === 'linked') toast('Alexa is linked to this TV');
+          if (ev.type === 'watch_plan') {
+            toast('Planning from Alexa…');
+            nav('/plan');
+            usePlan.getState().follow(ev.data.plan_id);
+          }
+          if (ev.type === 'plan_updated' && usePlan.getState().plan?.id === ev.data.plan_id) {
+            usePlan.getState().load(ev.data.plan_id);
+          }
+        }
+      } catch {
+        /* offline — try again next tick */
+      }
+    };
+    const t = setInterval(tick, 3000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [enabled, nav, toast]);
+}
 
-function AppShell() {
-  const { profile, loading, loadProfile } = useProfileStore();
-  const [ready, setReady] = useState(false);
+function Boot({ error, retry }: { error: string | null; retry: () => void }) {
+  return (
+    <FocusScope className="flex h-full flex-col items-center justify-center gap-[1.4rem]">
+      <Wordmark className="text-[6rem]" />
+      {error ? (
+        <>
+          <p className="text-[1.4rem] text-paper-muted">Can’t reach Vibe right now. {error}</p>
+          <button {...focusProps} data-autofocus className="btn btn-primary" onClick={retry}>
+            Try again
+          </button>
+        </>
+      ) : (
+        <span className="h-[0.7rem] w-[0.7rem] rounded-full bg-amber animate-pulse-dot" />
+      )}
+    </FocusScope>
+  );
+}
+
+function TvShell() {
+  const { profile, ready, error, load } = useProfile();
+  useEffect(() => {
+    load();
+  }, [load]);
+  useInbox(!!profile?.onboarding_completed);
+
+  if (!ready || (error && !profile)) return <Boot error={error} retry={load} />;
+  if (!profile?.onboarding_completed) return <Onboarding />;
+
+  return (
+    <Routes>
+      <Route path="/" element={<Home />} />
+      <Route path="/plan" element={<PlanScreen />} />
+      <Route path="/watch/:planId/:pickId" element={<WatchScreen />} />
+      <Route path="/feedback/:planId" element={<Feedback />} />
+      <Route path="/history" element={<History />} />
+      <Route path="/settings" element={<Settings />} />
+      <Route path="/couch" element={<Couch />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+
+function Root() {
+  const loc = useLocation();
+  const nav = useNavigate();
+  const phone = loc.pathname.startsWith('/join');
 
   useEffect(() => {
-    loadProfile().finally(() => setReady(true));
-  }, [loadProfile]);
+    document.documentElement.classList.toggle('tv', !phone);
+    document.documentElement.classList.toggle('phone', phone);
+  }, [phone]);
 
-  if (!ready || loading) {
+  useEffect(() => {
+    const onMenu = () => nav('/settings');
+    window.addEventListener('vibe:menu', onMenu);
+    return () => window.removeEventListener('vibe:menu', onMenu);
+  }, [nav]);
+
+  if (phone) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <h1 className="text-tv-2xl font-bold bg-gradient-to-r from-vibe-accent to-vibe-accent-light bg-clip-text text-transparent">
-            Vibe
-          </h1>
-          <p className="text-vibe-text-muted text-tv-base">Loading...</p>
-        </div>
-      </div>
+      <Routes>
+        <Route path="/join" element={<Join />} />
+        <Route path="/join/:code" element={<Join />} />
+      </Routes>
     );
   }
 
-  // If onboarding not completed, show onboarding
-  if (!profile?.onboarding_completed) {
-    return <OnboardingPage />;
-  }
-
   return (
-    <div>
-      {/* Simple nav bar */}
-      <nav className="fixed top-0 inset-x-0 z-40 bg-vibe-bg/80 backdrop-blur-lg border-b border-vibe-border/30">
-        <div className="max-w-6xl mx-auto flex items-center justify-between px-8 py-4">
-          <h1 className="text-tv-lg font-bold bg-gradient-to-r from-vibe-accent to-vibe-accent-light bg-clip-text text-transparent">
-            Vibe
-          </h1>
-          <div className="flex gap-6">
-            <a href="/" className="text-tv-sm text-vibe-text hover:text-vibe-accent transition-colors">
-              New Session
-            </a>
-            <a href="/history" className="text-tv-sm text-vibe-text-muted hover:text-vibe-accent transition-colors">
-              History
-            </a>
-          </div>
-        </div>
-      </nav>
-
-      <main className="pt-20">
-        <Routes>
-          <Route path="/" element={<SessionPage />} />
-          <Route path="/history" element={<HistoryPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </main>
-    </div>
+    <FocusProvider onRootBack={() => (loc.pathname === '/' ? exitApp() : nav('/'))}>
+      <div className="h-full w-full">
+        <TvShell />
+      </div>
+      <Toaster />
+    </FocusProvider>
   );
 }
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AppShell />
-    </BrowserRouter>
+    <HashRouter>
+      <Root />
+    </HashRouter>
   );
 }
