@@ -21,8 +21,42 @@ envv() { [ -f "$ENV_FILE" ] && grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f
 # "aws: [ERROR]: 'Status'" on some AWS CLI v2 versions). Recovers stacks left broken by earlier runs.
 #   cfn_apply <stack-name> <template-file> Key=Value ...
 cfn_failures() {
-  aws cloudformation describe-stack-events --stack-name "$1" --max-items 40 \
-    --query "StackEvents[?contains(ResourceStatus, 'FAILED')].[LogicalResourceId,ResourceStatusReason]" --output text 2>/dev/null | head -8
+  # Show why the stack failed, oldest first. Never hide errors here — they are the diagnosis.
+  local ev
+  if ! ev="$(aws cloudformation describe-stack-events --stack-name "$1" \
+      --query "reverse(StackEvents[?contains(ResourceStatus, 'FAILED')].[ResourceStatus,LogicalResourceId,ResourceStatusReason])" \
+      --output text 2>&1)"; then
+    printf "  (could not read stack events: %s)\n" "$ev"
+    case "$ev" in *AccessDenied*|*not\ authorized*) printf "  Your AWS user is missing permissions. Attach the AdministratorAccess policy to it (IAM console → Users → your user → Add permissions).\n";; esac
+    return
+  fi
+  if [ -z "$ev" ] || [ "$ev" = "None" ]; then
+    printf "  (no failed events recorded — open CloudFormation → Stacks → %s → Events in the AWS console)\n" "$1"
+    return
+  fi
+  printf "%s\n" "$ev" | head -12 | sed 's/^/  /'
+  case "$ev" in
+    *"Cannot have more than 0 builds"*|*"account is not authorized"*|*SubscriptionRequired*|*OptInRequired*)
+      printf "\n  → This AWS account can't use that service yet (common on new accounts). Try BUILD=local, or ask AWS Support to enable it.\n" ;;
+    *AccessDenied*|*not\ authorized*|*UnauthorizedOperation*)
+      printf "\n  → Your AWS user lacks permissions for these resources. Attach AdministratorAccess to it\n    (IAM console → Users → your user → Add permissions → AdministratorAccess) and re-run.\n" ;;
+  esac
+}
+cfn_delete() {
+  # Delete a stack; if some resources refuse to delete (ROLLBACK_FAILED / DELETE_FAILED), retain them and finish.
+  local name="$1"
+  aws cloudformation delete-stack --stack-name "$name"
+  if aws cloudformation wait stack-delete-complete --stack-name "$name" 2>/dev/null; then return 0; fi
+  local stuck; stuck="$(aws cloudformation describe-stack-resources --stack-name "$name" \
+    --query "StackResources[?ResourceStatus=='DELETE_FAILED'].LogicalResourceId" --output text 2>/dev/null || true)"
+  if [ -n "$stuck" ] && [ "$stuck" != "None" ]; then
+    say "Some resources in $name would not delete ($stuck) — leaving them in place and removing the stack"
+    # shellcheck disable=SC2086
+    aws cloudformation delete-stack --stack-name "$name" --retain-resources $stuck
+    aws cloudformation wait stack-delete-complete --stack-name "$name" 2>/dev/null && return 0
+  fi
+  printf "\nWhy:\n"; cfn_failures "$name"
+  die "Could not delete stack $name. Delete it in the CloudFormation console (Stacks → $name → Delete), then re-run."
 }
 cfn_apply() {
   local name="$1" tpl="$2"; shift 2
@@ -31,8 +65,7 @@ cfn_apply() {
   case "$status" in
     ROLLBACK_COMPLETE|ROLLBACK_FAILED|CREATE_FAILED|DELETE_FAILED|REVIEW_IN_PROGRESS)
       say "Stack $name is in state $status from an earlier attempt — removing it first"
-      aws cloudformation delete-stack --stack-name "$name"
-      aws cloudformation wait stack-delete-complete --stack-name "$name" || die "Could not delete $name. Delete it in the CloudFormation console and re-run."
+      cfn_delete "$name"
       status=NONE ;;
     *_IN_PROGRESS)
       say "Stack $name is busy ($status) — waiting for it to settle"
@@ -45,7 +78,7 @@ cfn_apply() {
       --parameters "$params" --capabilities CAPABILITY_IAM >/dev/null
     if ! aws cloudformation wait stack-create-complete --stack-name "$name"; then
       printf "\nWhat failed:\n"; cfn_failures "$name"
-      die "Creating $name failed (details above). Fix it and re-run — the failed stack is cleaned up automatically."
+      die "Creating $name failed (reasons above). Fix it and re-run — the failed stack is cleaned up automatically."
     fi
   else
     local out
@@ -81,6 +114,22 @@ command -v python3 >/dev/null || die "python3 not found. Install: brew install p
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null)" || die "AWS credentials not working. Run 'aws configure' or set keys in backend/.env"
 ok "AWS account $ACCOUNT, region $REGION, stack $STACK"
+
+# Permissions check: this deploy creates IAM roles, a database, CodeBuild, App Runner and CloudFront.
+CALLER_ARN="$(aws sts get-caller-identity --query Arn --output text)"
+case "$CALLER_ARN" in
+  *":user/"*)
+    IAM_USER="${CALLER_ARN##*/}"
+    POLICIES="$( { aws iam list-attached-user-policies --user-name "$IAM_USER" --query 'AttachedPolicies[].PolicyName' --output text 2>/dev/null
+                  for g in $(aws iam list-groups-for-user --user-name "$IAM_USER" --query 'Groups[].GroupName' --output text 2>/dev/null); do
+                    aws iam list-attached-group-policies --group-name "$g" --query 'AttachedPolicies[].PolicyName' --output text 2>/dev/null; done; } | tr '\t' ' ')"
+    case "$POLICIES" in
+      *AdministratorAccess*) ok "IAM user $IAM_USER has AdministratorAccess" ;;
+      *) say "IAM user $IAM_USER doesn't appear to have AdministratorAccess (found: ${POLICIES:-none visible})."
+         say "If the deploy fails with AccessDenied, attach AdministratorAccess in IAM → Users → $IAM_USER → Add permissions." ;;
+    esac ;;
+  *":root"*) say "You're using the account root user. It works, but an IAM user with AdministratorAccess is safer." ;;
+esac
 
 # ── 1. Backend image → ECR (exactly one image is kept) ─────────────────
 # BUILD=cloud (default): upload a ~1 MB source zip; AWS CodeBuild builds and pushes the image inside AWS.
@@ -119,7 +168,14 @@ else
   say "Uploading backend source"
   ( cd "$ROOT/backend" && zip -qr "$TMPD/backend.zip" . -x ".venv/*" "*__pycache__*" ".pytest_cache/*" ".ruff_cache/*" ".env" "dev.db" "tests/*" "*.ndjson" "htmlcov/*" )
   aws s3 cp "$TMPD/backend.zip" "s3://$SRC_BUCKET/backend.zip" --only-show-errors
-  BUILD_ID="$(aws codebuild start-build --project-name "$PROJECT" --query build.id --output text)"
+  if ! BUILD_ID="$(aws codebuild start-build --project-name "$PROJECT" --query build.id --output text 2>&1)"; then
+    case "$BUILD_ID" in
+      *"more than 0 builds"*|*"not authorized"*|*AccountLimitExceeded*)
+        die "CodeBuild isn't enabled for this AWS account yet (common on new accounts): $BUILD_ID
+  Workaround: BUILD=local ./deploy/aws/deploy.sh   (builds on your Mac with Docker Desktop). Or ask AWS Support to raise the CodeBuild concurrent build limit." ;;
+      *) die "Could not start the image build: $BUILD_ID" ;;
+    esac
+  fi
   say "Building image in AWS CodeBuild (usually 2–4 minutes)"
   last=""
   while true; do
